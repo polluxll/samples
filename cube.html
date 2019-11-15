@@ -1,0 +1,293 @@
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Cesium Cube</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.63.1/Build/Cesium/Cesium.js"></script>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.63.1/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/94/three.js"></script>
+    <style type="text/css">
+    body,
+    html {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        display: inline-flex;
+    }
+
+    #map {
+        width: 50%;
+        height: 100%;
+        display: inline-block;
+    }
+
+    #cube {
+        width: 50%;
+        height: 100%;
+        display: inline-block;
+        border-left: 1px solid red;
+        background-color: #000;
+    }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <canvas id="cube"></canvas>
+
+    <script type="text/javascript">
+    class CubePrimitive {
+        constructor(options) {
+            this.geometry = null;
+            this.combineGeometry([options.geometryInstance]);
+            this.cubeVertexShader = `attribute vec3 position2DHigh;
+            attribute vec3 position2DLow;
+            attribute vec2 compressedAttributes;
+            attribute vec3 position3DHigh;
+            attribute vec3 position3DLow;
+            attribute float batchId;
+
+            varying vec3 v_pos;
+            void main(){
+                vec3 position3D=position3DHigh+position3DLow;
+                vec3 position2D=position2DHigh+position2DLow;
+                v_pos=mix(position2D.zxy, position3D.xyz, czm_morphTime);
+                gl_Position = czm_modelViewProjection * vec4(v_pos,1.0);
+            }`;
+            this.cubeFragmentShader = `varying vec3 v_pos;
+            void main(){
+                vec4 color;
+                if(v_pos.x>2000000.0){
+                    float alpha=(v_pos.x-2000000.0)/2000000.0;
+                    color=vec4(1.0,1.0,1.0,alpha);
+                }else{
+                     color=vec4(1.0,0.0,0.0,1.0);
+                }          
+                gl_FragColor = color;
+            }`;
+        }
+
+        combineGeometry(geometris) {
+            var projection = new Cesium.WebMercatorProjection(Cesium.Ellipsoid.WGS84);
+            var result = Cesium.PrimitivePipeline.combineGeometry({
+                instances: geometris,
+                ellipsoid: projection.ellipsoid,
+                projection: projection,
+                elementIndexUintSupported: true,
+                scene3DOnly: false,
+                vertexCacheOptimize: false,
+                compressVertices: true,
+                modelMatrix: this.modelMatrix
+            });
+            this.geometry = result.geometries[0];
+            this.attributeLocations = result.attributeLocations;
+            this.modelMatrix = Cesium.Matrix4.clone(result.modelMatrix, this.modelMatrix);
+        }
+        createCubeCommand(context) {
+            var vertexArray = Cesium.VertexArray.fromGeometry({
+                context: context,
+                geometry: this.geometry,
+                attributeLocations: this.attributeLocations,
+                bufferUsage: Cesium.BufferUsage.STATIC_DRAW,
+            });
+            var shaderProgram = Cesium.ShaderProgram.fromCache({
+                context: context,
+                attributeLocations: this.attributeLocations,
+                vertexShaderSource: this.cubeVertexShader,
+                fragmentShaderSource: this.cubeFragmentShader
+            });
+            var renderState = Cesium.RenderState.fromCache({
+                depthTest: {
+                    enabled: false
+                },
+                depthMask: false,
+                cull: {
+                    enabled: false
+                },
+                blending: Cesium.ALPHA_BLEND //DISABLED  ALPHA_BLEND
+            });
+            return new Cesium.DrawCommand({
+                owner: this,
+                cull: false,
+                occlude: false,
+                boundingVolume: this.geometry.boundingSphere,
+                vertexArray: vertexArray,
+                modelMatrix: Cesium.Matrix4.IDENTITY,
+                shaderProgram: shaderProgram,
+                renderState: renderState,
+                pass: Cesium.Pass.TRANSLUCENT //OPAQUE : 8, TRANSLUCENT : 9, OVERLAY : 10,
+            });
+        }
+        update(frameState) {
+            if (!Cesium.defined(this.cubeCommand)) {
+                this.cubeCommand = this.createCubeCommand(frameState.context);
+            }
+            frameState.commandList.push(this.cubeCommand);
+        }
+    }
+
+    class ThreeJSPrimitive {
+        constructor(options) {
+            this.geometry = null;
+            this.combineGeometry([options.geometryInstance]);
+
+            var geometry = new THREE.BufferGeometry();
+            geometry.addAttribute('position2DHigh', new THREE.BufferAttribute(this.geometry.attributes.position2DHigh.values, 3));
+            geometry.addAttribute('position2DLow', new THREE.BufferAttribute(this.geometry.attributes.position2DLow.values, 3));
+            geometry.addAttribute('position3DHigh', new THREE.BufferAttribute(this.geometry.attributes.position3DHigh.values, 3));
+            geometry.addAttribute('position3DLow', new THREE.BufferAttribute(this.geometry.attributes.position3DLow.values, 3));
+            geometry.setIndex(new THREE.BufferAttribute(this.geometry.indices, 1));
+
+            var vertexShader = `precision highp float;
+            attribute vec3 position2DHigh;
+            attribute vec3 position2DLow;
+            attribute vec3 position3DHigh;
+            attribute vec3 position3DLow;
+            uniform float czm_morphTime;
+            varying vec3 v_pos;
+            void main(){
+                vec3 position3D=position3DHigh+position3DLow;
+                vec3 position2D=position2DHigh+position2DLow;
+                v_pos=mix(position2D.zxy, position3D.xyz, czm_morphTime);
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(v_pos,1.0);
+            }`;
+            var fragmentShader = `precision highp float;
+            varying vec3 v_pos;
+            void main(){      
+                vec4 color;
+                if(v_pos.x>2000000.0){
+                    float alpha=(v_pos.x-2000000.0)/2000000.0;
+                    color=vec4(1.0,1.0,1.0,alpha);
+                }else{
+                    color=vec4(1.0,0.0,0.0,1.0);
+                }       
+                gl_FragColor = color;
+            }`;
+
+
+            this.scene = new THREE.Scene();
+
+            this.material = new THREE.ShaderMaterial({
+                vertexShader: vertexShader,
+                fragmentShader: fragmentShader,
+                side: THREE.DoubleSide,
+                depthTest: false,
+                //blending: THREE.NoBlending,
+                //depthWrite: true,
+                transparent: true,
+                uniforms: {
+                    czm_morphTime: {
+                        needsUpdate: true,
+                        type: 'f',
+                        value: 0
+                    },
+                }
+            });
+
+            this.cubeMesh = new THREE.Mesh(geometry, this.material);
+            this.scene.add(this.cubeMesh);
+
+        }
+        combineGeometry(geometris) {
+            var projection = new Cesium.WebMercatorProjection(Cesium.Ellipsoid.WGS84);
+            var result = Cesium.PrimitivePipeline.combineGeometry({
+                instances: geometris,
+                ellipsoid: projection.ellipsoid,
+                projection: projection,
+                elementIndexUintSupported: true,
+                scene3DOnly: false,
+                vertexCacheOptimize: false,
+                compressVertices: true,
+                modelMatrix: this.modelMatrix
+            });
+            this.geometry = result.geometries[0];
+            this.attributeLocations = result.attributeLocations;
+            this.modelMatrix = Cesium.Matrix4.clone(result.modelMatrix, this.modelMatrix);
+        }
+
+        update(frameState) {
+            if (!this.renderer) {
+                this.renderer = new THREE.WebGLRenderer({
+                    canvas: document.getElementById('cube'),
+                    alpha: false
+                });
+                this.renderer.autoClear = true;
+            }
+
+            var camera = frameState.camera;
+            if (!this.camera) {
+                this.camera = new THREE.Camera();
+            }
+            this.camera.projectionMatrix = new THREE.Matrix4().fromArray(camera.frustum.projectionMatrix);
+            this.camera.matrix = new THREE.Matrix4().getInverse(new THREE.Matrix4().fromArray(camera.viewMatrix));
+            this.camera.matrix.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
+
+            this.material.uniforms.czm_morphTime.value =frameState.morphTime;
+            this.renderer.state.reset();
+            this.renderer.render(this.scene, this.camera);
+        }
+    }
+
+    var viewer = new Cesium.Viewer('map', {
+        sceneMode: Cesium.SceneMode.COLUMBUS_VIEW
+    });
+
+    var cubeCanvas = document.getElementById('cube');
+    cubeCanvas.width = viewer.canvas.width;
+    cubeCanvas.height = viewer.canvas.height;
+
+    var minLon = 10;
+    var maxLon = 138.39092;
+    var minLat = 3;
+    var maxLat = 54.39436;
+    var minHeight = 0;
+    var maxHeight = 4000000;
+    var topBound = [];
+    var botBound = [];
+    var stepCount = 100;
+    var lonStep = (maxLon - minLon) / stepCount;
+    for (var i = 0; i <= stepCount; i++) { //line
+        var lon = minLon + i * lonStep;
+        topBound.push(lon, maxLat);
+        lon = maxLon - i * lonStep;
+        botBound.push(lon, minLat)
+    }
+
+    var degreesArray = [minLon, minLat,
+        minLon, maxLat
+    ];
+    degreesArray = degreesArray.concat(topBound);
+    degreesArray.push(maxLon, minLat);
+    degreesArray = degreesArray.concat(botBound);
+
+
+    var polygon = new Cesium.PolygonGeometry({
+        polygonHierarchy: new Cesium.PolygonHierarchy(
+            Cesium.Cartesian3.fromDegreesArray(degreesArray)
+        ),
+        height: maxHeight,
+        extrudedHeight: 0
+    });
+    var geometry = Cesium.PolygonGeometry.createGeometry(polygon);
+    var geoInstance = new Cesium.GeometryInstance({
+        geometry: geometry
+    });
+    var primitive = new CubePrimitive({
+        geometryInstance: geoInstance,
+        primitiveType: Cesium.PrimitiveType.TRIANGLES
+    });
+    viewer.scene.primitives.add(primitive);
+
+    var primitive3 = new ThreeJSPrimitive({
+        geometryInstance: geoInstance
+    });
+    viewer.scene.primitives.add(primitive3);
+
+
+    viewer.camera.flyTo({
+         destination: Cesium.Cartesian3.fromDegrees(50, 20,50000000),
+    });
+    </script>
+</body>
+
+</html>
